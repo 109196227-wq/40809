@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 跑酷遊戲</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: white;
+        }
+        #gameCanvas {
+            display: block;
+        }
+        #instructions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 20px 30px;
+            background-color: rgba(0, 0, 0, 0.7);
+            border-radius: 15px;
+            text-align: center;
+            font-size: 1.2em;
+            cursor: pointer;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+        }
+        #instructions h1 {
+            margin-top: 0;
+            font-size: 1.8em;
+            color: #4dd0e1;
+        }
+        #instructions p {
+            margin-bottom: 10px;
+        }
+        #instructions strong {
+            color: #ffab40;
+        }
+        .crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 10px;
+            height: 10px;
+            border: 2px solid white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            display: none; /* 初始隱藏 */
+        }
+    </style>
+</head>
+<body>
+    
+    <div id="instructions">
+        <h1>3D 跑酷遊戲</h1>
+        <p>按 Enter 鍵開始</p>
+        <p><strong>W / ↑</strong>: 前進</p>
+        <p><strong>S / ↓</strong>: 後退</p>
+        <p><strong>A / ←</strong>: 向左</p>
+        <p><strong>D / →</strong>: 向右</p>
+        <p><strong>Shift</strong>: 衝刺</p>
+        <p><strong>空白鍵</strong>: 跳躍</p>
+        <p><strong>滑鼠</strong>: 控制視角</p>
+        <p><strong>C</strong>: 切換視角</p>
+    </div>
+
+    <div class="crosshair" id="crosshair"></div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- 引入函式庫 --><script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+
+    <script type="module">
+        // --- 基本設定 ---
+        let scene, camera, renderer, world;
+        let playerMesh, playerBody;
+        let objectsToUpdate = [];
+        const keys = {};
+        let canJump = false;
+        let isThirdPerson = false; // 新增：視角狀態
+
+        const playerSpeed = 240.0; // 再次增加基本移動速度 (x20)
+        const sprintSpeed = 400.0; // 衝刺速度 (x20)
+        const playerJumpForce = 200.0; // 再次增加跳躍力道 (x20)
+
+        // --- 初始化 ---
+        function init() {
+            // 场景
+            scene = new THREE.Scene();
+            // scene.background = new THREE.Color(0x87ceeb); // 天空藍，現在由天空盒取代
+            scene.background = null; // 讓天空盒顯示出來
+
+            // 物理世界
+            world = new CANNON.World();
+            world.gravity.set(0, -9.82, 0); // 設定重力
+            world.broadphase = new CANNON.NaiveBroadphase();
+            world.solver.iterations = 10;
+
+            // 相機
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 30000); // 增加可視距離
+            scene.add(camera);
+
+            // 渲染器
+            renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gameCanvas'), antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+
+            // --- 光照 ---
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1100, 5000, 550); // 調整光照位置以覆蓋更大區域
+            directionalLight.castShadow = true;
+            // 設定陰影品質
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            // 調整陰影攝影機範圍
+            directionalLight.shadow.camera.left = -5500;
+            directionalLight.shadow.camera.right = 5500;
+            directionalLight.shadow.camera.top = 5500;
+            directionalLight.shadow.camera.bottom = -5500;
+            directionalLight.shadow.camera.near = 0.5;
+            directionalLight.shadow.camera.far = 10000;
+            scene.add(directionalLight);
+
+            // --- 天空盒 (Skybox) ---
+            const cubeTextureLoader = new THREE.CubeTextureLoader();
+            const texture = cubeTextureLoader.load([
+                'https://threejs.org/examples/textures/cube/Bridge2/posx.jpg',
+                'https://threejs.org/examples/textures/cube/Bridge2/negx.jpg',
+                'https://threejs.org/examples/textures/cube/Bridge2/posy.jpg',
+                'https://threejs.org/examples/textures/cube/Bridge2/negy.jpg',
+                'https://threejs.org/examples/textures/cube/Bridge2/posz.jpg',
+                'https://threejs.org/examples/textures/cube/Bridge2/negz.jpg'
+            ]);
+            scene.background = texture;
+
+
+            // --- 玩家 ---
+            const playerGeometry = new THREE.CylinderGeometry(0.5, 0.5, 2, 16); 
+            const playerMaterial = new THREE.MeshStandardMaterial({ color: 0xff4500 });
+            playerMesh = new THREE.Mesh(playerGeometry, playerMaterial);
+            playerMesh.castShadow = true;
+            playerMesh.position.set(0, 5, 0);
+            playerMesh.visible = false; // 初始隱藏 (因為預設是第一人稱)
+            scene.add(playerMesh);
+            
+            // 玩家物理實體 (使用球體簡化)
+            const playerShape = new CANNON.Sphere(0.5); // 半徑
+            playerBody = new CANNON.Body({ mass: 5, shape: playerShape });
+            playerBody.position.copy(playerMesh.position);
+            playerBody.linearDamping = 0.9; // 增加摩擦力，使其不會一直滑動
+            world.addBody(playerBody);
+
+
+            // --- 地板 ---
+            createPlatform(new THREE.Vector3(11000, 1, 11000), new THREE.Vector3(0, -1, 0), 0x4caf50, 0); // 地板放大 110 倍
+
+            // --- 建立跑酷平台 ---
+            // 平台位置放大 110 倍, 平台大小放大 10 倍
+            createPlatform(new THREE.Vector3(50, 1, 50), new THREE.Vector3(0, 0, -1100));
+            createPlatform(new THREE.Vector3(50, 1, 50), new THREE.Vector3(880, 1, -2200));
+            createPlatform(new THREE.Vector3(20, 1, 100), new THREE.Vector3(0, 2, -3300));
+            createPlatform(new THREE.Vector3(100, 1, 20), new THREE.Vector3(-1100, 3, -3300));
+            createPlatform(new THREE.Vector3(50, 1, 50), new THREE.Vector3(-1650, 4, -2200));
+
+            for (let i = 0; i < 500; i++) { // 將障礙物數量增加到 500
+                const size = (Math.random() * 2 + 1) * 10; // 平台大小放大 10 倍
+                createPlatform(
+                    new THREE.Vector3(size, 1, size),
+                    new THREE.Vector3(
+                        (Math.random() - 0.5) * 10000, // 擴大 X 軸分佈範圍
+                        Math.random() * 50 + 5, // 增加高度變化
+                        (Math.random() - 0.5) * 10000 // 擴大 Z 軸分佈範圍
+                    )
+                );
+            }
+            
+            // --- 事件監聽 ---
+            initControls();
+            window.addEventListener('resize', onWindowResize, false);
+            
+            // --- 啟動動畫循環 ---
+            animate();
+        }
+
+        // --- 建立平台輔助函式 ---
+        function createPlatform(size, position, color = 0xaaaaaa, mass = 0) {
+            // Three.js 視覺部分
+            const geometry = new THREE.BoxGeometry(size.x, size.y, size.z);
+            const material = new THREE.MeshStandardMaterial({ color: color });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.copy(position);
+            mesh.receiveShadow = true;
+            scene.add(mesh);
+            
+            // Cannon.js 物理部分
+            const shape = new CANNON.Box(new CANNON.Vec3(size.x * 0.5, size.y * 0.5, size.z * 0.5));
+            const body = new CANNON.Body({ mass: mass, shape: shape });
+            body.position.copy(mesh.position);
+            world.addBody(body);
+            
+            // 如果平台是靜態的，則不需要更新
+            if (mass > 0) {
+                objectsToUpdate.push({ mesh, body });
+            }
+        }
+        
+        // --- 控制項初始化 ---
+        function initControls() {
+            const instructions = document.getElementById('instructions');
+            const crosshair = document.getElementById('crosshair');
+            const canvas = document.getElementById('gameCanvas');
+
+            document.addEventListener('keydown', (event) => {
+                keys[event.key.toLowerCase()] = true;
+
+                // 按 Enter 開始遊戲
+                if (event.key === 'Enter' && !document.pointerLockElement) {
+                    canvas.requestPointerLock().catch((err) => {
+                        // 捕捉用戶取消指針鎖定時可能發生的錯誤，避免控制台報錯
+                        console.warn('Pointer lock failed or was cancelled by user:', err);
+                    });
+                }
+
+                // 新增：切換視角
+                if (event.key.toLowerCase() === 'c') {
+                    isThirdPerson = !isThirdPerson;
+                    playerMesh.visible = isThirdPerson; // 切換玩家模型的可見性
+                }
+            });
+
+            document.addEventListener('keyup', (event) => {
+                keys[event.key.toLowerCase()] = false;
+            });
+
+            // 跳躍
+            document.addEventListener('keydown', (event) => {
+                if (event.code === 'Space' && canJump) {
+                    playerBody.velocity.y = playerJumpForce;
+                    canJump = false;
+                }
+            });
+
+            // 檢查是否可以跳躍 (當玩家接觸到物體時)
+            playerBody.addEventListener("collide", (event) => {
+                // 碰撞點在玩家下方時才算可跳躍
+                const contactNormal = new CANNON.Vec3();
+                event.contact.ni.negate(contactNormal);
+                if(contactNormal.y > 0.5) {
+                    canJump = true;
+                }
+            });
+            
+            // 滑鼠鎖定與視角控制
+            document.addEventListener('pointerlockchange', () => {
+                if (document.pointerLockElement === canvas) {
+                    instructions.style.display = 'none';
+                    crosshair.style.display = 'block';
+                    document.addEventListener('mousemove', onMouseMove, false);
+                } else {
+                    instructions.style.display = 'block';
+                    crosshair.style.display = 'none';
+                    document.removeEventListener('mousemove', onMouseMove, false);
+                }
+            });
+        }
+        
+        let cameraPitch = 0;
+        let cameraYaw = 0;
+
+        function onMouseMove(event) {
+            const movementX = event.movementX || 0;
+            const movementY = event.movementY || 0;
+            
+            cameraYaw -= movementX * 0.002;
+            cameraPitch -= movementY * 0.002;
+
+            // 限制上下視角範圍
+            cameraPitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, cameraPitch));
+            
+            const euler = new THREE.Euler(cameraPitch, cameraYaw, 0, 'YXZ');
+            camera.quaternion.setFromEuler(euler);
+
+            // 新增: 更新玩家模型的旋轉 (僅Y軸)
+            const yawEuler = new THREE.Euler(0, cameraYaw, 0, 'YXZ');
+            playerMesh.quaternion.setFromEuler(yawEuler);
+        }
+
+        // --- 處理玩家輸入 ---
+        function handleControls(deltaTime) {
+            const currentSpeed = keys['shift'] ? sprintSpeed : playerSpeed; // 根據Shift鍵是否按下，決定目前速度
+
+            const moveDirection = new THREE.Vector3();
+            const forward = new THREE.Vector3();
+            const right = new THREE.Vector3();
+
+            camera.getWorldDirection(forward);
+            forward.y = 0;
+            forward.normalize();
+            
+            right.crossVectors(camera.up, forward).normalize();
+
+            if (keys['w'] || keys['arrowup']) {
+                moveDirection.add(forward);
+            }
+            if (keys['s'] || keys['arrowdown']) {
+                moveDirection.sub(forward);
+            }
+            if (keys['a'] || keys['arrowleft']) {
+                moveDirection.add(right);
+            }
+            if (keys['d'] || keys['arrowright']) {
+                moveDirection.sub(right);
+            }
+
+            if (moveDirection.length() > 0) {
+                moveDirection.normalize();
+                const velocity = moveDirection.multiplyScalar(currentSpeed); // 使用目前速度來計算
+                playerBody.velocity.x = velocity.x;
+                playerBody.velocity.z = velocity.z;
+            }
+        }
+        
+        // --- 視窗大小調整 ---
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- 新增：更新攝影機位置函式 ---
+        function updateCameraPosition() {
+            if (isThirdPerson) {
+                // 第三稱視角
+                const offset = new THREE.Vector3(0, 2, 5); // 攝影機在玩家後面 (x=0, y=2(稍高), z=5(在後面))
+                // 將偏移量應用於攝影機 (滑鼠控制) 的旋轉
+                offset.applyQuaternion(camera.quaternion); 
+                // 將偏移量加到玩家的物理位置上
+                offset.add(playerBody.position); 
+                
+                // 讓攝影機平滑移動
+                camera.position.lerp(offset, 0.2); // 使用 0.2 加快跟隨速度
+                
+            } else {
+                // 第一人稱視角
+                camera.position.copy(playerBody.position);
+            }
+        }
+
+        // --- 動畫循環 ---
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const deltaTime = clock.getDelta();
+
+            // 更新物理世界
+            world.step(1 / 60, deltaTime, 3);
+            
+            // 處理控制
+            if(document.pointerLockElement) {
+                handleControls(deltaTime);
+            }
+
+            // 同步物理實體和視覺模型
+            playerMesh.position.copy(playerBody.position);
+            // 玩家模型的旋轉現在由 onMouseMove 控制
+
+            // 更新攝影機位置，使其跟隨玩家
+            updateCameraPosition(); // 新的函式
+            
+            // 更新其他動態物體
+            for(const object of objectsToUpdate) {
+                object.mesh.position.copy(object.body.position);
+                object.mesh.quaternion.copy(object.body.quaternion);
+            }
+
+            // 檢查玩家是否掉出世界
+            if (playerMesh.position.y < -20) {
+                playerBody.position.set(0, 5, 0);
+                playerBody.velocity.set(0, 0, 0);
+            }
+            
+            renderer.render(scene, camera);
+        }
+
+        // --- 啟動 ---
+        init();
+
+    </script>
+</body>
+</html>
